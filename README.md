@@ -7,19 +7,11 @@ Develop a program that kept keep track of time
 Develop a elevator
 ## Project Members
 * Ahmed Alaoui
-  * I/O Redirection
-  * Cd Command
+  
 * Amanda Grant 
-  * Parsing 
-  * Environment Variables
-  * Prompt
-   * Piping
-  * Tilde Expansion
-  * Echo Command and Exit Command
+  
 * Ardonniss Zimero
-  * Path Search
-  * External Command Execution
-  * Background Processing
+  
 ## File Contents
 
 # How to Run
