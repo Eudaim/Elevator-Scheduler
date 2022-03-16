@@ -1,10 +1,10 @@
 # Operating Systems Project 2
 ### Part 1 
-Develop a program that call 3 system calls
+Wrote an empty C program, empty.c. Then, created a copy of this program called part1.c to add exactly four system calls to the program. 
 ### Part 2
-Develop a program that kept keep track of time
+created a kernel module called my_timer that calls current_kernel_time() and stores the time value; current_kernel_time() holds the number of seconds and nanoseconds since the Epoch
 ### Part 3 
-Develop a elevator
+implemented a scheduling algorithm for a pet elevator. 
 ## Project Members
 * Ahmed Alaoui
   * Implemented Mutex for List used in Elevator Module
@@ -34,7 +34,7 @@ Develop a elevator
   * Makefile 
   * start_elevator.c
   * stop_elevator.c
-  * issueu_request.c
+  * issue_request.c
 * Systemcall(part 3)
   * 
 
