@@ -1,7 +1,5 @@
-obj-m := elevatorModule.o
-obj-y := start_elevator.o
-obj-y := stop_elevator.o
-obj-y := issue_request.o
+obj-m := elevator.o
+obj-y := start_elevator.oobj-y := stop_elevator.o obj-y := issue_request.o
 
 PWD := $(shell pwd)
 KDIR := /lib/modules/`uname -r`/build
