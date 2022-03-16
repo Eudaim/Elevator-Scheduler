@@ -45,12 +45,11 @@ int rp;
 struct task_struct* elevator_thread;
 static int procfs_buf_len;
 
-//int numOccupants; 
+//Counter variables
 int currentOccupants;
 int waitingPassengers; 
 int passengerServiced; 
 int passengerServicedEachFloor[FLOORS];
-
 int currentFloor; 
 int currentWeight; 
 int currentState; 
@@ -58,8 +57,10 @@ int nextState;
 int occupantType;
 int passengerEachFloor[FLOORS];
 int desFloors[100];
+
+//Containers used to store passengers
 struct list_head listOfPassengers[FLOORS];      //head of list
-struct list_head elevatorList;
+struct list_head elevatorList;                  //List used to store current elevator passengers
 struct mutex mutexForPassengersQueue; 
 struct mutex mutexForElevatorList;
 struct passenger 
@@ -80,11 +81,8 @@ int getElevatorSize(void);
 char * getPassengersOnFloor(int floor);
 char * getPassengerType(int type);
 char * getPassengerList(void);
-char * getPassengersOnElevator(void);
-//void delete(struct list_head *start);
-//void delete_front_list(struct list_head **front);
-void print_current_elevator(void);
-// int removeItem(struct list_head * queue, struct passenger * remove_passenger);
+char * getElevatorinfo(void);
+
 
 extern long (*STUB_start_elevator)(void);
 long start_elevator(void) {
@@ -103,18 +101,12 @@ long start_elevator(void) {
 
 extern long (*STUB_stop_elevator)(void);
 long stop_elevator(void) {
-	if(currentState == STOPPING){
+	if(currentState == OFFLINE){
         printk("elevator is stopping\n");
         return 1; 
     }
     else{ 
-        if(currentOccupants == 0){
-            printk("elevator is stop\n"); 
-            currentState = OFFLINE;
-        }
-        else{
-            currentState = STOPPING;
-        }
+        currentState = OFFLINE;
         return 0;
     }
 
@@ -139,7 +131,8 @@ long issue_request(int start_floor,int destination_floor, int type) {
         return 0; 
     }
 }
-int addPassengersToQueue(int type, int floor, int endFloor) {
+
+int addPassengersToQueue(int type, int floor, int endFloor) {           //When issue request is called this function adds passengers to the queue on their floor
     printk("adding passenger to queue....");
     int weight;
     struct passenger *tempPassenger; 
@@ -151,12 +144,11 @@ int addPassengersToQueue(int type, int floor, int endFloor) {
     if(tempPassenger == NULL)
         return -ENOMEM; 
     
-    
-    
     tempPassenger->startFloor = floor; 
     tempPassenger->endFloor = endFloor; 
     tempPassenger->weight = weight;
     tempPassenger->type = type;
+
     mutex_lock_interruptible(&mutexForPassengersQueue);
     list_add_tail(&tempPassenger->next, &listOfPassengers[floor - 1]);  //adding passenger to queue on their start floor
     mutex_unlock(&mutexForPassengersQueue);
@@ -164,16 +156,18 @@ int addPassengersToQueue(int type, int floor, int endFloor) {
 
 }
 
-int addPassengersToElevator(void) {
+int addPassengersToElevator(void) {                             //Called to add a passenger to the elevator from the floor queue
     struct passenger *newPassenger, *temp3;
     struct list_head *temp, *temp2; 
-    printk("ADDING PASSENGER 1");
+    
     currentState = LOADING;
+    
+    ssleep(1);
 
     mutex_lock_interruptible(&mutexForPassengersQueue);
     list_for_each_safe(temp, temp2, &listOfPassengers[currentFloor -1]){  //allows you iterate throught list even thought null elements are present
         newPassenger = list_entry(temp, struct passenger, next);
-        //creating a new reference to a new pointer(?
+
         if(currentOccupants > 10  || (currentWeight + newPassenger->weight) > 100){
             mutex_unlock(&mutexForPassengersQueue);
             return 0;
@@ -183,59 +177,60 @@ int addPassengersToElevator(void) {
          temp3->startFloor = newPassenger->startFloor;
          temp3->endFloor = newPassenger->endFloor; 
          temp3->weight = newPassenger->weight; 
-         printk("ADDING PASSENGER 2");
+        
         mutex_lock_interruptible(&mutexForElevatorList);
         currentOccupants++;
         currentWeight += temp3->weight;
         list_add_tail(&temp3->next, &elevatorList);
         passengerEachFloor[temp3->startFloor-1]--;
         mutex_unlock(&mutexForElevatorList);
+        
         list_del(temp);
-        printk("ADDING PASSENGER 3");
+
         kfree(newPassenger);
         waitingPassengers--;
 
     }
     mutex_unlock(&mutexForPassengersQueue);
-     printk("PASSENGER ADDED");
+
    return 1;
 }
 
-void moveFloor(void){
-
+void moveFloor(void){                                               //Used to traverse the floors with the elevator depening on the first person in the eleavtor list
 
     struct list_head *ptrTemp, *ptrTemp2; 
     struct passenger * temp;
+    
     temp = kmalloc(sizeof(struct passenger), __GFP_RECLAIM | __GFP_IO | __GFP_FS);
     mutex_lock_interruptible(&mutexForElevatorList);
     temp = list_first_entry_or_null(&elevatorList, struct passenger, next);
     printk("First Entry End Floor: %d", temp->endFloor );
+    
     int difference = 0;
     if(temp->endFloor < currentFloor){
-        if(currentState != STOPPING)
+        if(currentState != OFFLINE)
             currentState = DOWN;
         difference = currentFloor - temp->endFloor;
     }
     else if(temp->endFloor > currentFloor){
-        if(currentState != STOPPING)
-           currentState = UP;
+        if(currentState != OFFLINE)
+            currentState = UP;
         difference = temp->endFloor -  currentFloor;
     }
 
-    printk("NEW CODE...\n");
     ssleep(difference * 2);
     currentFloor = temp->endFloor;
 
-    printk("NEW CODE2...\n");
     passengerServiced++;
     currentWeight -= temp->weight; 
     list_del(elevatorList.next);
 
-    printk("NEW CODE3...\n");
     currentOccupants--;
+        ssleep(1);
     mutex_unlock(&mutexForElevatorList);
     kfree(temp);
 }
+
 int openElevatorModule(struct inode *sp_inode, struct file *sp_file)
 {
     rp  = 1; 
@@ -255,7 +250,7 @@ static ssize_t procfile_read(struct file* sp_file, char __user * ubuf, size_t co
                             "Number of Passengers:%d \n"
                             "Number of Passengers waiting: %d\n"
                             "Number of Passengers Serviced %d\n"
-                            "\n%s\n", currentFloor, currentWeight, getPassengersOnElevator(), currentOccupants, waitingPassengers, passengerServiced, getPassengerList()); 
+                            "\n%s\n", currentFloor, currentWeight, getElevatorinfo(), currentOccupants, waitingPassengers, passengerServiced, getPassengerList()); 
             break;
         case IDLE: 
             sprintf(message,"Elevator State: IDLE\n"
@@ -263,8 +258,9 @@ static ssize_t procfile_read(struct file* sp_file, char __user * ubuf, size_t co
                             "Current Weight: %d \n"
                             "Elevator Status: %s\n"
                             "Number of Passengers:%d \n"
+                            "Number of Passengers waiting: %d\n"
                             "Number of Passengers Serviced %d\n"
-                            "\n%s\n", currentFloor, currentWeight, getPassengersOnElevator(), currentOccupants, waitingPassengers, passengerServiced, getPassengerList());
+                            "\n%s\n", currentFloor, currentWeight, getElevatorinfo(), currentOccupants, waitingPassengers, passengerServiced, getPassengerList());
             break;
         case UP: 
             sprintf(message,"Elevator State: UP\n"
@@ -272,8 +268,9 @@ static ssize_t procfile_read(struct file* sp_file, char __user * ubuf, size_t co
                             "Current Weight: %d \n"
                             "Elevator Status: %s\n"
                             "Number of Passengers:%d \n"
+                            "Number of Passengers waiting: %d\n"
                             "Number of Passengers Serviced %d\n"
-                            "\n%s\n", currentFloor, currentWeight, getPassengersOnElevator(), currentOccupants, waitingPassengers, passengerServiced, getPassengerList());
+                            "\n%s\n", currentFloor, currentWeight, getElevatorinfo(), currentOccupants, waitingPassengers, passengerServiced, getPassengerList());
             break;
         case DOWN: 
             sprintf(message,"Elevator State: DOWN\n"
@@ -281,8 +278,9 @@ static ssize_t procfile_read(struct file* sp_file, char __user * ubuf, size_t co
                             "Current Weight: %d \n"
                             "Elevator Status: %s\n"
                             "Number of Passengers:%d \n"
+                            "Number of Passengers waiting: %d\n"
                             "Number of Passengers Serviced %d\n"
-                            "\n%s\n", currentFloor, currentWeight, getPassengersOnElevator(), currentOccupants, waitingPassengers, passengerServiced, getPassengerList());
+                            "\n%s\n", currentFloor, currentWeight, getElevatorinfo(), currentOccupants, waitingPassengers, passengerServiced, getPassengerList());
             break;
         case LOADING: 
             sprintf(message,"Elevator State: LOADING\n"
@@ -290,20 +288,12 @@ static ssize_t procfile_read(struct file* sp_file, char __user * ubuf, size_t co
                             "Current Weight: %d \n"
                             "Elevator Status: %s\n"
                             "Number of Passengers:%d \n"
+                            "Number of Passengers waiting: %d\n"
                             "Number of Passengers Serviced %d\n"
-                            "\n%s\n", currentFloor, currentWeight, getPassengersOnElevator(), currentOccupants, waitingPassengers, passengerServiced, getPassengerList());
-            break;
-        case STOPPING:
-         sprintf(message,"Elevator State: STOPPING\n"
-                            "Current Floor: %d\n"
-                            "Current Weight: %d \n"
-                            "Elevator Status: %s\n"
-                            "Number of Passengers:%d \n"
-                            "Number of Passengers Serviced %d\n"
-                            "\n%s\n", currentFloor, currentWeight, getPassengersOnElevator(), currentOccupants, waitingPassengers, passengerServiced, getPassengerList());
+                            "\n%s\n", currentFloor, currentWeight, getElevatorinfo(), currentOccupants, waitingPassengers, passengerServiced, getPassengerList());
             break;
         default:
-            sprintf(message, "");
+            sprintf(message, " ");
             break;
     };
 	int len = strlen(message); 
@@ -313,8 +303,6 @@ static ssize_t procfile_read(struct file* sp_file, char __user * ubuf, size_t co
         return 0; 
 
     copy_to_user(ubuf,message,len);
-    // kfree(stringTemp0); 
-    // kfree(stringTemp1);
     kfree(message);
     return len;
 }
@@ -331,20 +319,18 @@ int elevatorRun(void *data)
 
     while(!kthread_should_stop())
     {
-        if(currentState == STOPPING && currentOccupants == 0){
-                currentState = OFFLINE;
-        }
-        if(currentState != OFFLINE){ 
-            if(currentState != STOPPING) 
-                addPassengersToElevator();
+    
+        if(currentState != OFFLINE){
+            addPassengersToElevator();
             if(currentOccupants != 0){
                 moveFloor();
             }
             else if(waitingPassengers != 0){
              if(k < FLOORS){
                     k++;
-                    currentFloor = k;
+                    currentState = UP;
                     ssleep(2);
+                    currentFloor = k;
                 }
                 printk("Status is: %d", currentState);
                 printk("waiting passengers: %d", waitingPassengers); 
@@ -353,12 +339,15 @@ int elevatorRun(void *data)
                 printk("total serviced: %d\n", passengerServiced);
                 printk("--------------------------------------------------------\n");
 
-                if(k == FLOORS)
+                if(k == FLOORS){
                     k = 0;
+                }
             }
             else
                 currentState = IDLE;
         }
+        else if(currentOccupants != 0)
+            moveFloor();
     }
     
     return 0;
@@ -415,7 +404,7 @@ static int elevator_init(void)
 	return 0;
 }
 
-static void elevator_exit(void)
+static void elevator_exit(void)                             //Called when no more passenegrs will be added to the queue
 {
 	proc_remove(proc_entry);
     kthread_stop(elevator_thread);
@@ -425,19 +414,20 @@ static void elevator_exit(void)
     printk("Elevator Stopped\n");
 	return;
 }
-int getWeight(int type)
+int getWeight(int type)                                       //Returns the weight of whatever type is passed in
 {
-    if(CAT)
+    if(type == CAT)
         return 15; 
-    else if(DOG)
+    else if(type == DOG)
         return 45; 
-    else if(LIZARD)
+    else if(type == LIZARD)
         return 5;
 }
-int getElevatorSize(void){
+int getElevatorSize(void){                                  //Loops through elevator list and returns current occupant size
     struct passenger *entry; 
     struct list_head *temp;
     int i = 0; 
+
     mutex_lock_interruptible(&mutexForElevatorList);
     list_for_each(temp, &elevatorList){
             entry = list_entry(temp, struct passenger, next);
@@ -446,32 +436,24 @@ int getElevatorSize(void){
     mutex_unlock(&mutexForElevatorList);
     return i;
 }
-void print_current_elevator(void) {
-    struct list_head *temp;
-    struct passenger *entry;
-    int i = 0;
-    list_for_each(temp, &elevatorList) {
-        entry = list_entry(temp, struct passenger, next);
-        printk("Passenger (%d): %d\n", i, entry->type);
-        i++;
-    }
-}
+
 char * getPassengerList(void)
 { 
     stringTemp0 = kmalloc(sizeof(char) * 3000, __GFP_RECLAIM | __GFP_IO | __GFP_FS);
     switch(currentFloor)
     {
         case 1: 
-            sprintf(stringTemp0,"[] Floor 10: \n"
-                 "[] Floor 9: \n"
-                 "[] Floor 8: \n"
-                 "[] Floor 7: \n"
-                 "[] Floor 6: \n"
-                 "[] Floor 5: \n"
-                 "[] Floor 4: \n"
-                 "[] Floor 3: \n"
-                 "[] Floor 2: \n"
-                 "[*] Floor 1: \n");
+            sprintf(stringTemp0,"[] Floor 10: %d %s\n"
+                 "[] Floor 9: %d %s\n"
+                 "[] Floor 8: %d %s\n"
+                 "[] Floor 7: %d %s\n"
+                 "[] Floor 6: %d %s\n"
+                 "[] Floor 5: %d %s\n"
+                 "[] Floor 4: %d %s\n"
+                 "[] Floor 3: %d %s\n"
+                 "[] Floor 2: %d %s\n"
+                 "[*] Floor 1: %d %s\n",passengerEachFloor[9], getPassengersOnFloor(10), passengerEachFloor[8], getPassengersOnFloor(9), passengerEachFloor[7], getPassengersOnFloor(8), passengerEachFloor[6], getPassengersOnFloor(7), passengerEachFloor[5], getPassengersOnFloor(6),
+                                passengerEachFloor[4], getPassengersOnFloor(5), passengerEachFloor[3], getPassengersOnFloor(4), passengerEachFloor[2], getPassengersOnFloor(3), passengerEachFloor[1], getPassengersOnFloor(2), passengerEachFloor[0], getPassengersOnFloor(1));
             break;
         case 2: 
             sprintf(stringTemp0,"[] Floor 10: %d %s\n"
@@ -483,8 +465,8 @@ char * getPassengerList(void)
                  "[] Floor 4: %d %s\n"
                  "[] Floor 3: %d %s\n"
                  "[*] Floor 2: %d %s\n"
-                 "[] Floor 1: %d %s\n",passengerEachFloor[0], getPassengersOnFloor(1), passengerEachFloor[1], getPassengersOnFloor(2), passengerEachFloor[2], getPassengersOnFloor(3), passengerEachFloor[3], getPassengersOnFloor(4), passengerEachFloor[4], getPassengersOnFloor(5),
-                                passengerEachFloor[5], getPassengersOnFloor(6), passengerEachFloor[6], getPassengersOnFloor(7), passengerEachFloor[7], getPassengersOnFloor(8), passengerEachFloor[8], getPassengersOnFloor(9), passengerEachFloor[9], getPassengersOnFloor(10));
+                 "[] Floor 1: %d %s\n",passengerEachFloor[9], getPassengersOnFloor(10), passengerEachFloor[8], getPassengersOnFloor(9), passengerEachFloor[7], getPassengersOnFloor(8), passengerEachFloor[6], getPassengersOnFloor(7), passengerEachFloor[5], getPassengersOnFloor(6),
+                                passengerEachFloor[4], getPassengersOnFloor(5), passengerEachFloor[3], getPassengersOnFloor(4), passengerEachFloor[2], getPassengersOnFloor(3), passengerEachFloor[1], getPassengersOnFloor(2), passengerEachFloor[0], getPassengersOnFloor(1));
              break;
         case 3: 
             sprintf(stringTemp0,"[] Floor 10: %d %s\n"
@@ -496,8 +478,8 @@ char * getPassengerList(void)
                  "[] Floor 4: %d %s\n"
                  "[*] Floor 3: %d %s\n"
                  "[] Floor 2: %d %s\n"
-                 "[] Floor 1: %d %s\n",passengerEachFloor[0], getPassengersOnFloor(1), passengerEachFloor[1], getPassengersOnFloor(2), passengerEachFloor[2], getPassengersOnFloor(3), passengerEachFloor[3], getPassengersOnFloor(4), passengerEachFloor[4], getPassengersOnFloor(5),
-                                passengerEachFloor[5], getPassengersOnFloor(6), passengerEachFloor[6], getPassengersOnFloor(7), passengerEachFloor[7], getPassengersOnFloor(8), passengerEachFloor[8], getPassengersOnFloor(9), passengerEachFloor[9], getPassengersOnFloor(10));
+                 "[] Floor 1: %d %s\n",passengerEachFloor[9], getPassengersOnFloor(10), passengerEachFloor[8], getPassengersOnFloor(9), passengerEachFloor[7], getPassengersOnFloor(8), passengerEachFloor[6], getPassengersOnFloor(7), passengerEachFloor[5], getPassengersOnFloor(6),
+                                passengerEachFloor[4], getPassengersOnFloor(5), passengerEachFloor[3], getPassengersOnFloor(4), passengerEachFloor[2], getPassengersOnFloor(3), passengerEachFloor[1], getPassengersOnFloor(2), passengerEachFloor[0], getPassengersOnFloor(1));
             break;
         case 4: 
             sprintf(stringTemp0,"[] Floor 10: %d %s\n"
@@ -509,8 +491,8 @@ char * getPassengerList(void)
                  "[*] Floor 4: %d %s\n"
                  "[] Floor 3: %d %s\n"
                  "[] Floor 2: %d %s\n"
-                 "[] Floor 1: %d %s\n",passengerEachFloor[0], getPassengersOnFloor(1), passengerEachFloor[1], getPassengersOnFloor(2), passengerEachFloor[2], getPassengersOnFloor(3), passengerEachFloor[3], getPassengersOnFloor(4), passengerEachFloor[4], getPassengersOnFloor(5),
-                                passengerEachFloor[5], getPassengersOnFloor(6), passengerEachFloor[6], getPassengersOnFloor(7), passengerEachFloor[7], getPassengersOnFloor(8), passengerEachFloor[8], getPassengersOnFloor(9), passengerEachFloor[9], getPassengersOnFloor(10));
+                 "[] Floor 1: %d %s\n",passengerEachFloor[9], getPassengersOnFloor(10), passengerEachFloor[8], getPassengersOnFloor(9), passengerEachFloor[7], getPassengersOnFloor(8), passengerEachFloor[6], getPassengersOnFloor(7), passengerEachFloor[5], getPassengersOnFloor(6),
+                                passengerEachFloor[4], getPassengersOnFloor(5), passengerEachFloor[3], getPassengersOnFloor(4), passengerEachFloor[2], getPassengersOnFloor(3), passengerEachFloor[1], getPassengersOnFloor(2), passengerEachFloor[0], getPassengersOnFloor(1));
             break;
         case 5: 
             sprintf(stringTemp0,"[] Floor 10: %d %s\n"
@@ -522,8 +504,8 @@ char * getPassengerList(void)
                  "[] Floor 4: %d %s\n"
                  "[] Floor 3: %d %s\n"
                  "[] Floor 2: %d %s\n"
-                 "[] Floor 1: %d %s\n",passengerEachFloor[0], getPassengersOnFloor(1), passengerEachFloor[1], getPassengersOnFloor(2), passengerEachFloor[2], getPassengersOnFloor(3), passengerEachFloor[3], getPassengersOnFloor(4), passengerEachFloor[4], getPassengersOnFloor(5),
-                                passengerEachFloor[5], getPassengersOnFloor(6), passengerEachFloor[6], getPassengersOnFloor(7), passengerEachFloor[7], getPassengersOnFloor(8), passengerEachFloor[8], getPassengersOnFloor(9), passengerEachFloor[9], getPassengersOnFloor(10));
+                 "[] Floor 1: %d %s\n",passengerEachFloor[9], getPassengersOnFloor(10), passengerEachFloor[8], getPassengersOnFloor(9), passengerEachFloor[7], getPassengersOnFloor(8), passengerEachFloor[6], getPassengersOnFloor(7), passengerEachFloor[5], getPassengersOnFloor(6),
+                                passengerEachFloor[4], getPassengersOnFloor(5), passengerEachFloor[3], getPassengersOnFloor(4), passengerEachFloor[2], getPassengersOnFloor(3), passengerEachFloor[1], getPassengersOnFloor(2), passengerEachFloor[0], getPassengersOnFloor(1));
             break;
         case 6: 
             sprintf(stringTemp0,"[] Floor 10: %d %s\n"
@@ -535,8 +517,8 @@ char * getPassengerList(void)
                  "[] Floor 4: %d %s\n"
                  "[] Floor 3: %d %s\n"
                  "[] Floor 2: %d %s\n"
-                 "[] Floor 1: %d %s\n",passengerEachFloor[0], getPassengersOnFloor(1), passengerEachFloor[1], getPassengersOnFloor(2), passengerEachFloor[2], getPassengersOnFloor(3), passengerEachFloor[3], getPassengersOnFloor(4), passengerEachFloor[4], getPassengersOnFloor(5),
-                                passengerEachFloor[5], getPassengersOnFloor(6), passengerEachFloor[6], getPassengersOnFloor(7), passengerEachFloor[7], getPassengersOnFloor(8), passengerEachFloor[8], getPassengersOnFloor(9), passengerEachFloor[9], getPassengersOnFloor(10));
+                 "[] Floor 1: %d %s\n",passengerEachFloor[9], getPassengersOnFloor(10), passengerEachFloor[8], getPassengersOnFloor(9), passengerEachFloor[7], getPassengersOnFloor(8), passengerEachFloor[6], getPassengersOnFloor(7), passengerEachFloor[5], getPassengersOnFloor(6),
+                                passengerEachFloor[4], getPassengersOnFloor(5), passengerEachFloor[3], getPassengersOnFloor(4), passengerEachFloor[2], getPassengersOnFloor(3), passengerEachFloor[1], getPassengersOnFloor(2), passengerEachFloor[0], getPassengersOnFloor(1));
             break;
         case 7: 
             sprintf(stringTemp0,"[] Floor 10: %d %s\n"
@@ -548,8 +530,8 @@ char * getPassengerList(void)
                  "[] Floor 4: %d %s\n"
                  "[] Floor 3: %d %s\n"
                  "[] Floor 2: %d %s\n"
-                 "[] Floor 1: %d %s\n",passengerEachFloor[0], getPassengersOnFloor(1), passengerEachFloor[1], getPassengersOnFloor(2), passengerEachFloor[2], getPassengersOnFloor(3), passengerEachFloor[3], getPassengersOnFloor(4), passengerEachFloor[4], getPassengersOnFloor(5),
-                                passengerEachFloor[5], getPassengersOnFloor(6), passengerEachFloor[6], getPassengersOnFloor(7), passengerEachFloor[7], getPassengersOnFloor(8), passengerEachFloor[8], getPassengersOnFloor(9), passengerEachFloor[9], getPassengersOnFloor(10));
+                 "[] Floor 1: %d %s\n",passengerEachFloor[9], getPassengersOnFloor(10), passengerEachFloor[8], getPassengersOnFloor(9), passengerEachFloor[7], getPassengersOnFloor(8), passengerEachFloor[6], getPassengersOnFloor(7), passengerEachFloor[5], getPassengersOnFloor(6),
+                                passengerEachFloor[4], getPassengersOnFloor(5), passengerEachFloor[3], getPassengersOnFloor(4), passengerEachFloor[2], getPassengersOnFloor(3), passengerEachFloor[1], getPassengersOnFloor(2), passengerEachFloor[0], getPassengersOnFloor(1));
             break;
         case 8: 
             sprintf(stringTemp0,"[] Floor 10: %d %s\n"
@@ -561,8 +543,8 @@ char * getPassengerList(void)
                  "[] Floor 4: %d %s\n"
                  "[] Floor 3: %d %s\n"
                  "[] Floor 2: %d %s\n"
-                 "[] Floor 1: %d %s\n",passengerEachFloor[0], getPassengersOnFloor(1), passengerEachFloor[1], getPassengersOnFloor(2), passengerEachFloor[2], getPassengersOnFloor(3), passengerEachFloor[3], getPassengersOnFloor(4), passengerEachFloor[4], getPassengersOnFloor(5),
-                                passengerEachFloor[5], getPassengersOnFloor(6), passengerEachFloor[6], getPassengersOnFloor(7), passengerEachFloor[7], getPassengersOnFloor(8), passengerEachFloor[8], getPassengersOnFloor(9), passengerEachFloor[9], getPassengersOnFloor(10));
+                 "[] Floor 1: %d %s\n",passengerEachFloor[9], getPassengersOnFloor(10), passengerEachFloor[8], getPassengersOnFloor(9), passengerEachFloor[7], getPassengersOnFloor(8), passengerEachFloor[6], getPassengersOnFloor(7), passengerEachFloor[5], getPassengersOnFloor(6),
+                                passengerEachFloor[4], getPassengersOnFloor(5), passengerEachFloor[3], getPassengersOnFloor(4), passengerEachFloor[2], getPassengersOnFloor(3), passengerEachFloor[1], getPassengersOnFloor(2), passengerEachFloor[0], getPassengersOnFloor(1));
             break;
         case 9: 
             sprintf(stringTemp0,"[] Floor 10: %d %s\n"
@@ -574,8 +556,8 @@ char * getPassengerList(void)
                  "[] Floor 4: %d %s\n"
                  "[] Floor 3: %d %s\n"
                  "[] Floor 2: %d %s\n"
-                 "[] Floor 1: %d %s\n",passengerEachFloor[0], getPassengersOnFloor(1), passengerEachFloor[1], getPassengersOnFloor(2), passengerEachFloor[2], getPassengersOnFloor(3), passengerEachFloor[3], getPassengersOnFloor(4), passengerEachFloor[4], getPassengersOnFloor(5),
-                                passengerEachFloor[5], getPassengersOnFloor(6), passengerEachFloor[6], getPassengersOnFloor(7), passengerEachFloor[7], getPassengersOnFloor(8), passengerEachFloor[8], getPassengersOnFloor(9), passengerEachFloor[9], getPassengersOnFloor(10));
+                 "[] Floor 1: %d %s\n",passengerEachFloor[9], getPassengersOnFloor(10), passengerEachFloor[8], getPassengersOnFloor(9), passengerEachFloor[7], getPassengersOnFloor(8), passengerEachFloor[6], getPassengersOnFloor(7), passengerEachFloor[5], getPassengersOnFloor(6),
+                                passengerEachFloor[4], getPassengersOnFloor(5), passengerEachFloor[3], getPassengersOnFloor(4), passengerEachFloor[2], getPassengersOnFloor(3), passengerEachFloor[1], getPassengersOnFloor(2), passengerEachFloor[0], getPassengersOnFloor(1));
             break;
         case 10: 
             sprintf(stringTemp0,"[*] Floor 10: %d %s\n"
@@ -587,8 +569,8 @@ char * getPassengerList(void)
                  "[] Floor 4: %d %s\n"
                  "[] Floor 3: %d %s\n"
                  "[] Floor 2: %d %s\n"
-                 "[] Floor 1: %d %s\n",passengerEachFloor[0], getPassengersOnFloor(1), passengerEachFloor[1], getPassengersOnFloor(2), passengerEachFloor[2], getPassengersOnFloor(3), passengerEachFloor[3], getPassengersOnFloor(4), passengerEachFloor[4], getPassengersOnFloor(5),
-                                passengerEachFloor[5], getPassengersOnFloor(6), passengerEachFloor[6], getPassengersOnFloor(7), passengerEachFloor[7], getPassengersOnFloor(8), passengerEachFloor[8], getPassengersOnFloor(9), passengerEachFloor[9], getPassengersOnFloor(10));
+                 "[] Floor 1: %d %s\n",passengerEachFloor[9], getPassengersOnFloor(10), passengerEachFloor[8], getPassengersOnFloor(9), passengerEachFloor[7], getPassengersOnFloor(8), passengerEachFloor[6], getPassengersOnFloor(7), passengerEachFloor[5], getPassengersOnFloor(6),
+                                passengerEachFloor[4], getPassengersOnFloor(5), passengerEachFloor[3], getPassengersOnFloor(4), passengerEachFloor[2], getPassengersOnFloor(3), passengerEachFloor[1], getPassengersOnFloor(2), passengerEachFloor[0], getPassengersOnFloor(1));
             break;
         default:
             sprintf(stringTemp0, " ");
@@ -596,7 +578,7 @@ char * getPassengerList(void)
     }
     return stringTemp0;
 }
-char * getPassengersOnFloor(int floor)
+char * getPassengersOnFloor(int floor)              
 {
     char *temp;  
     char *temp2;
@@ -604,27 +586,28 @@ char * getPassengersOnFloor(int floor)
     struct list_head *ptemp;
     struct list_head *nullptemp;
     int check = 0;
+
     temp = kmalloc(sizeof(char) * 20, __GFP_RECLAIM | __GFP_IO | __GFP_FS);
-    temp2 = kmalloc(sizeof(char) * 20, __GFP_RECLAIM | __GFP_IO | __GFP_FS);
+    temp2 = kmalloc(sizeof(char) * 156, __GFP_RECLAIM | __GFP_IO | __GFP_FS);
     strcpy(temp2, "");
     mutex_lock_interruptible(&mutexForPassengersQueue);
     list_for_each_safe(ptemp, nullptemp, &listOfPassengers[floor-1]) {
         entry = list_entry(ptemp, struct passenger, next);
-        sprintf(temp,"%s", getPassengerType(entry->type));
-        //printk("%s\n", temp);
+        sprintf(temp,"%s", getPassengerType(entry->type));;
         strcat(temp2,temp);
-        //printk("%s\n", temp2);
+
         check = 1;
     }
     mutex_unlock(&mutexForPassengersQueue);
+    
     if(!check)
     {
         strcpy(temp2, " ");
     }
-    printk("%s\n", temp2);
+
     return temp2;
 }
-char * getPassengerType(int type)
+char * getPassengerType(int type)                   //Returns C string of whatever type of animal is passed in as type
 {
     stringTemp1 = kmalloc(sizeof(char) * 4, __GFP_RECLAIM | __GFP_IO | __GFP_FS); 
     switch(type)
@@ -634,6 +617,7 @@ char * getPassengerType(int type)
             break;
         case LIZARD: 
             sprintf(stringTemp1, "L "); 
+
             break; 
         case DOG: 
             sprintf(stringTemp1, "D "); 
@@ -642,33 +626,32 @@ char * getPassengerType(int type)
 
     return stringTemp1;
 }
-char * getPassengersOnElevator(void)
+char * getElevatorinfo(void)
 {
-    char *temp;  
-    char *temp2;
-    struct passenger *entry; 
-    struct list_head *ptemp;
-    struct list_head *nullptemp;
+    struct list_head *temp; 
+    struct list_head *nulltemp; 
+    struct passenger * passengerTemp; 
+    char * tempstring;
+    char * tempstring2; 
     int check = 0;
-    temp = kmalloc(sizeof(char) * 20, __GFP_RECLAIM | __GFP_IO | __GFP_FS);
-    temp2 = kmalloc(sizeof(char) * 20, __GFP_RECLAIM | __GFP_IO | __GFP_FS);
-    strcpy(temp2, "");
-    mutex_lock_interruptible(&mutexForElevatorList);
-    list_for_each_safe(ptemp, nullptemp, &elevatorList) {
-        entry = list_entry(ptemp, struct passenger, next);
-        sprintf(temp,"%s", getPassengerType(entry->type));
-        //printk("%s\n", temp);
-        strcat(temp2,temp);
-        //printk("%s\n", temp2);
-        check = 1;
-    }
-    mutex_unlock(&mutexForElevatorList);
-    if(!check)
+
+    tempstring = kmalloc(sizeof(char) * 20,  __GFP_RECLAIM | __GFP_IO | __GFP_FS);
+    tempstring2 = kmalloc(sizeof(char) * 50,  __GFP_RECLAIM | __GFP_IO | __GFP_FS);
+    strcpy(tempstring2, "");
+    list_for_each_safe(temp, nulltemp, &elevatorList)
     {
-        strcpy(temp2, " ");
+        passengerTemp = list_entry(temp,struct passenger, next);
+        sprintf(tempstring,"%s", getPassengerType(passengerTemp->type)); 
+        strcat(tempstring2,tempstring);
+        check = 1;
+
     }
-    printk("%s\n", temp2);
-    return temp2;
+
+    if(!check)
+        strcpy(tempstring, "");
+    return tempstring2;
 }
+
 module_init(elevator_init);
 module_exit(elevator_exit);
+
