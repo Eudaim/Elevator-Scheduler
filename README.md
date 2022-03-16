@@ -24,10 +24,12 @@ implemented a scheduling algorithm for a pet elevator.
 ## File Contents
 
 * Part 1
-  * something
-  * something 
+  * empty.c
+  * part1.c
+  * empty.trace
+  * part1.trace 
 * my_timer - part2 
-  * something
+  * 
   * something 
 * SystemCalls - part 3
   * elevatorModule.c 
@@ -47,10 +49,12 @@ Go to folder where the contents of the program is held and type in the command p
 ```
 make
 ```
-after that the the Makefile should run it scripts and a shell file should pop up. From there run
+after that the the Makefile should run it scripts and a the repective module should be created for part 2 and part 3 to load the module run
 ```
-./shell
+sudo insmod modulename.ko
 ```
+from there the module is loaded and should be running
+
 ## MakeFile Description
 When you run the makefile in the repective folders it will generate the module for each part of the project
 
